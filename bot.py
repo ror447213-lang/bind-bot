@@ -4,17 +4,30 @@ import sqlite3
 import io
 import threading
 import time
+import os
+from flask import Flask
 from telebot import types
 from datetime import datetime, timedelta
 
 # ================= CONFIGURATION =================
 TOKEN = "8637581331:AAHJonNLyJ_f5k5bfOnJgdVmtKWlPOnjmus"  # BotFather se lein
-ADMIN_ID = 7634132457           # Apna numerical ID yahan dalein (@userinfobot se milegi)
+ADMIN_ID = 7634132457           # Apna numerical ID yahan dalein
 UPI_ID = "rohit.hacrr@fam"     # Aapki UPI ID
 ADMIN_USERNAME = "@RO4IT1"     # Aapka Username
 # =================================================
 
 bot = telebot.TeleBot(TOKEN)
+app = Flask(__name__)
+
+# Render ke liye chota Web Server
+@app.route('/')
+def home():
+    return "Bot is Running 24/7!"
+
+def run_flask():
+    # Render hamesha 'PORT' environment variable deta hai
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
 
 # --- DATABASE SETUP ---
 def init_db():
@@ -43,10 +56,8 @@ def set_expiry(user_id, hours=0, days=0):
             if old_expiry > now:
                 start_time = old_expiry
         except: pass
-
     new_expiry = start_time + timedelta(days=days, hours=hours)
     expiry_str = new_expiry.strftime('%Y-%m-%d %H:%M:%S')
-    
     conn = sqlite3.connect('bot_users.db')
     c = conn.cursor()
     c.execute("INSERT OR REPLACE INTO users (user_id, expiry_time) VALUES (?, ?)", (user_id, expiry_str))
@@ -74,7 +85,6 @@ def expiry_checker():
         time.sleep(60)
 
 # --- BOT HANDLERS ---
-
 @bot.message_handler(commands=['start'])
 def start(message):
     init_db()
@@ -110,29 +120,26 @@ def generate_qr(message):
         buf = io.BytesIO()
         qr.save(buf)
         buf.seek(0)
-        
-        caption = (f"💰 **Amount: ₹{amount}**\n\n"
-                   f"1. QR Scan karke payment karein.\n"
-                   f"2. Niche apna **UTR (Transaction ID)** bhejien.")
-        bot.send_photo(message.chat.id, buf, caption=caption, parse_mode="Markdown")
+        bot.send_photo(message.chat.id, buf, caption=f"💰 **Amount: ₹{amount}**\n\nQR Scan karke pay karein aur **UTR Number** bhein.")
         bot.register_next_step_handler(message, process_utr, amount)
     except:
-        bot.send_message(message.chat.id, "❌ Galt input. Sirf numbers bhejien.")
+        bot.send_message(message.chat.id, "❌ Sirf numbers bhejien.")
 
 def process_utr(message, amount):
     utr = message.text
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("✅ Approve", callback_data=f"app_{message.from_user.id}_{amount}"),
                types.InlineKeyboardButton("❌ Reject", callback_data=f"rej_{message.from_user.id}"))
-    
-    bot.send_message(ADMIN_ID, f"🔔 **New Payment**\nID: `{message.from_user.id}`\nAmt: ₹{amount}\nUTR: `{utr}`", reply_markup=markup, parse_mode="Markdown")
-    bot.send_message(message.chat.id, "✅ **UTR Received!**\nVerification mein **30-60 min** lagenge. Sabr rakhein.")
+    try:
+        bot.send_message(ADMIN_ID, f"🔔 **New Payment**\nID: `{message.from_user.id}`\nAmt: ₹{amount}\nUTR: `{utr}`", reply_markup=markup, parse_mode="Markdown")
+        bot.send_message(message.chat.id, "✅ **UTR Received!**\nAdmin verification mein **30-60 min** lagenge.")
+    except:
+        bot.send_message(message.chat.id, "❌ Error: Admin not found. Admin must start the bot.")
 
 @bot.callback_query_handler(func=lambda call: True)
 def admin_action(call):
     data = call.data.split('_')
     action, u_id = data[0], int(data[1])
-
     if action == "app":
         amt = int(data[2])
         h, d = 0, 0
@@ -141,23 +148,23 @@ def admin_action(call):
         elif amt >= 100: h = 24
         elif amt >= 50: h = 12
         elif amt >= 10: h = 2
-        
         expiry = set_expiry(u_id, hours=h, days=d)
         bot.send_message(u_id, f"🎉 **Approved!**\nAccess granted till: `{expiry}`", parse_mode="Markdown")
         bot.edit_message_text(f"✅ Approved: {u_id}", call.message.chat.id, call.message.message_id)
-    
     elif action == "rej":
         bot.send_message(u_id, "❌ Your payment was rejected.")
         bot.edit_message_text(f"❌ Rejected: {u_id}", call.message.chat.id, call.message.message_id)
 
 @bot.message_handler(func=lambda m: m.text == '📞 Contact Admin')
 def contact(message):
-    bot.send_message(message.chat.id, f"Custom deals ke liye: {ADMIN_USERNAME}")
+    bot.send_message(message.chat.id, f"Custom deals: {ADMIN_USERNAME}")
 
 # --- START ---
 if __name__ == "__main__":
     init_db()
+    # Flask ko alag thread mein chalana
+    threading.Thread(target=run_flask, daemon=True).start()
+    # Expiry checker ko alag thread mein chalana
     threading.Thread(target=expiry_checker, daemon=True).start()
     print("Bot is running...")
     bot.infinity_polling()
-                           
